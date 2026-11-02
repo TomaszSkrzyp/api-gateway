@@ -87,7 +87,7 @@ var _ = Describe("status", func() {
 			readyCond := meta.FindStatusCondition(cr.Status.Conditions, operatorv1alpha1.ConditionTypeReady)
 			Expect(readyCond).ToNot(BeNil())
 			Expect(cr.Status.State).To(Equal(operatorv1alpha1.Processing))
-			Expect(readyCond.Status).To(Equal(metav1.ConditionUnknown))
+			Expect(readyCond.Status).To(Equal(metav1.ConditionFalse))
 			Expect(readyCond.Reason).To(Equal(operatorv1alpha1.ProcessingCondition().Reason))
 			Expect(readyCond.ObservedGeneration).To(Equal(int64(3)))
 		})
@@ -111,7 +111,7 @@ var _ = Describe("status", func() {
 			readyCond := meta.FindStatusCondition(cr.Status.Conditions, operatorv1alpha1.ConditionTypeReady)
 			Expect(readyCond).ToNot(BeNil())
 			Expect(cr.Status.State).To(Equal(operatorv1alpha1.Processing))
-			Expect(readyCond.Status).To(Equal(metav1.ConditionUnknown))
+			Expect(readyCond.Status).To(Equal(metav1.ConditionFalse))
 			Expect(readyCond.Reason).To(Equal(operatorv1alpha1.ProcessingCondition().Reason))
 			Expect(readyCond.ObservedGeneration).To(Equal(int64(0)))
 		})
@@ -276,7 +276,7 @@ var _ = Describe("status", func() {
 
 			readyCond := meta.FindStatusCondition(cr.Status.Conditions, operatorv1alpha1.ConditionTypeReady)
 			Expect(readyCond).ToNot(BeNil())
-			Expect(readyCond.Status).To(Equal(metav1.ConditionUnknown))
+			Expect(readyCond.Status).To(Equal(metav1.ConditionFalse))
 			Expect(readyCond.ObservedGeneration).To(Equal(int64(3)))
 
 			networkCond := meta.FindStatusCondition(cr.Status.Conditions, operatorv1alpha1.ConditionTypeNetworkPolicy)

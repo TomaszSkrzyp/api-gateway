@@ -155,9 +155,7 @@ func (r *APIGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		r.updateStatus(ctx, &apiGatewayCR, controller.ErrorStatus(err, msg, operatorv1alpha1.ErrorCondition(operatorv1alpha1.ReasonReconcileFailed, msg), operatorv1alpha1.NetworkPolicyErrorCondition(msg)))
 		return r.requeueReconciliation(err)
 	}
-	if !networkPoliciesEnabled {
-		accumulatedConditions = append(accumulatedConditions, operatorv1alpha1.NetworkPolicyDisabledCondition())
-	} else {
+	if networkPoliciesEnabled {
 		accumulatedConditions = append(accumulatedConditions, operatorv1alpha1.NetworkPolicyReadyCondition())
 	}
 
@@ -188,12 +186,6 @@ func (r *APIGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	kymaGatewayStatus := gateway.ReconcileKymaGateway(ctx, r.Client, &apiGatewayCR, APIGatewayResourceListDefaultPath)
 	if !kymaGatewayStatus.IsReady() {
 		kymaGatewayStatus.SetConditions(accumulatedConditions...)
-		if !kymaGatewayStatus.IsError() && !kymaGatewayStatus.IsWarning() {
-			if err := controller.UpdateApiGatewayStatus(ctx, r.Client, &apiGatewayCR, kymaGatewayStatus); err != nil {
-				return ctrl.Result{}, err
-			}
-			return ctrl.Result{RequeueAfter: certificateRequeueInterval}, nil
-		}
 		r.updateStatus(ctx, &apiGatewayCR, kymaGatewayStatus)
 		return r.requeueReconciliation(kymaGatewayStatus.NestedError())
 	}
@@ -224,12 +216,35 @@ func (r *APIGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, nil
 	}
 
+	// Write Processing instead of Ready while Gardener Certificate or DNSEntry provisioning is still pending.
+	if gardenerProvisioningPending(accumulatedConditions) {
+		s := controller.ProcessingStatus(operatorv1alpha1.ProcessingCondition())
+		s.SetConditions(accumulatedConditions...)
+		if statusErr := controller.UpdateApiGatewayStatus(ctx, r.Client, &apiGatewayCR, s); statusErr != nil {
+			r.log.Error(statusErr, "Update status failed")
+			return ctrl.Result{}, statusErr
+		}
+		return ctrl.Result{RequeueAfter: certificateRequeueInterval}, nil
+	}
+
 	if statusErr := controller.UpdateApiGatewayStatus(ctx, r.Client, &apiGatewayCR, controller.ReadyStatus(append(accumulatedConditions, operatorv1alpha1.ReadyCondition())...)); statusErr != nil {
 		r.log.Error(statusErr, "Update status failed")
 		return ctrl.Result{}, statusErr
 	}
 
 	return r.finishReconcile()
+}
+
+// gardenerProvisioningPending returns true if a Gardener Certificate or DNSEntry is still being provisioned.
+func gardenerProvisioningPending(conditions []metav1.Condition) bool {
+	for _, c := range conditions {
+		if c.Status == metav1.ConditionFalse {
+			if c.Reason == operatorv1alpha1.ReasonCertificateReconcilePending || c.Reason == operatorv1alpha1.ReasonDNSEntryReconcilePending {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func dependenciesErrorConditions(name string, err error) (readyCond, depCond metav1.Condition) {

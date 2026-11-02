@@ -10,6 +10,7 @@ import (
 	"github.com/kyma-project/api-gateway/internal/controller"
 	"github.com/kyma-project/api-gateway/internal/dependencies"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -69,7 +70,10 @@ func ReconcileKymaGateway(ctx context.Context, k8sClient client.Client, apiGatew
 
 	if !hasKymaGatewayFinalizer(*apiGatewayCR) {
 		ctrl.Log.Info("There is no Kyma Gateway finalizer, skipping reconciliation")
-		return controller.ReadyStatus(v1alpha1.ReadyCondition(), desiredKymaGatewayCondition(*apiGatewayCR))
+		if isKymaGatewayEnabled(*apiGatewayCR) {
+			return controller.ReadyStatus(v1alpha1.ReadyCondition(), v1alpha1.KymaGatewayReadyCondition())
+		}
+		return controller.ReadyStatus(v1alpha1.ReadyCondition())
 	}
 
 	if !isKymaGatewayEnabled(*apiGatewayCR) || apiGatewayCR.IsInDeletion() {
@@ -108,9 +112,6 @@ func ReconcileKymaGateway(ctx context.Context, k8sClient client.Client, apiGatew
 	}
 
 	conditions, err := reconcile(ctx, k8sClient, *apiGatewayCR)
-	if (errors.Is(err, ErrCertificatePending) || errors.Is(err, ErrDNSEntryPending)) && apiGatewayCR.Status.State != v1alpha1.Ready {
-		return controller.ProcessingStatus(append([]metav1.Condition{v1alpha1.ProcessingCondition(), v1alpha1.KymaGatewayProcessingCondition()}, conditions...)...)
-	}
 	if err != nil {
 		msg := "Error during Kyma Gateway reconciliation: " + err.Error()
 		return controller.ErrorStatus(err, msg, append([]metav1.Condition{v1alpha1.ErrorCondition(v1alpha1.ReasonReconcileFailed, msg), v1alpha1.KymaGatewayErrorCondition(msg)}, conditions...)...)
@@ -124,14 +125,11 @@ func ReconcileKymaGateway(ctx context.Context, k8sClient client.Client, apiGatew
 		}
 	}
 
-	return controller.ReadyStatus(append([]metav1.Condition{v1alpha1.ReadyCondition(), desiredKymaGatewayCondition(*apiGatewayCR)}, conditions...)...)
-}
-
-func desiredKymaGatewayCondition(apiGatewayCR v1alpha1.APIGateway) metav1.Condition {
-	if !isKymaGatewayEnabled(apiGatewayCR) && !apiGatewayCR.IsInDeletion() {
-		return v1alpha1.KymaGatewayDisabledCondition()
+	kymaGatewayConds := []metav1.Condition{v1alpha1.ReadyCondition()}
+	if isKymaGatewayEnabled(*apiGatewayCR) && !apiGatewayCR.IsInDeletion() {
+		kymaGatewayConds = append(kymaGatewayConds, v1alpha1.KymaGatewayReadyCondition())
 	}
-	return v1alpha1.KymaGatewayReadyCondition()
+	return controller.ReadyStatus(append(kymaGatewayConds, conditions...)...)
 }
 
 func reconcile(ctx context.Context, k8sClient client.Client, apiGatewayCR v1alpha1.APIGateway) ([]metav1.Condition, error) {
@@ -160,6 +158,9 @@ func reconcile(ctx context.Context, k8sClient client.Client, apiGatewayCR v1alph
 		if err := reconcileNonGardenerCertificateSecret(ctx, k8sClient, apiGatewayCR); err != nil {
 			return conditions, err
 		}
+		if isKymaGatewayEnabled(apiGatewayCR) && !apiGatewayCR.IsInDeletion() {
+			conditions = append(conditions, v1alpha1.CertificateSelfSignedCondition(), v1alpha1.DNSLocalDomainCondition())
+		}
 	}
 
 	if err := reconcileKymaGatewayVirtualService(ctx, k8sClient, apiGatewayCR, domain); err != nil {
@@ -181,8 +182,12 @@ func reconcile(ctx context.Context, k8sClient client.Client, apiGatewayCR v1alph
 		switch {
 		case dnsErr == nil:
 			conditions = append(conditions, v1alpha1.DNSEntryReadyCondition())
-		case errors.Is(dnsErr, ErrDNSEntryPending):
+		case errors.Is(dnsErr, ErrDNSEntryPending) && apiGatewayCR.Status.State != v1alpha1.Ready:
 			conditions = append(conditions, v1alpha1.DNSEntryProcessingCondition())
+		case errors.Is(dnsErr, ErrDNSEntryPending):
+			if last := meta.FindStatusCondition(apiGatewayCR.Status.Conditions, v1alpha1.ConditionTypeDNSEntry); last != nil {
+				conditions = append(conditions, *last)
+			}
 		default:
 			conditions = append(conditions, v1alpha1.DNSEntryErrorCondition(dnsErr.Error()))
 		}
@@ -191,8 +196,12 @@ func reconcile(ctx context.Context, k8sClient client.Client, apiGatewayCR v1alph
 		switch {
 		case certErr == nil:
 			conditions = append(conditions, v1alpha1.CertificateReadyCondition())
-		case errors.Is(certErr, ErrCertificatePending):
+		case errors.Is(certErr, ErrCertificatePending) && apiGatewayCR.Status.State != v1alpha1.Ready:
 			conditions = append(conditions, v1alpha1.CertificateProcessingCondition())
+		case errors.Is(certErr, ErrCertificatePending):
+			if last := meta.FindStatusCondition(apiGatewayCR.Status.Conditions, v1alpha1.ConditionTypeCertificate); last != nil {
+				conditions = append(conditions, *last)
+			}
 		default:
 			conditions = append(conditions, v1alpha1.CertificateErrorCondition(certErr.Error()))
 		}
@@ -203,7 +212,7 @@ func reconcile(ctx context.Context, k8sClient client.Client, apiGatewayCR v1alph
 		if certErr != nil && !errors.Is(certErr, ErrCertificatePending) {
 			return conditions, certErr
 		}
-		return conditions, errors.Join(dnsErr, certErr)
+		return conditions, nil
 	}
 
 	return conditions, nil

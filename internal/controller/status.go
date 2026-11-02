@@ -36,6 +36,7 @@ type Status interface {
 	Description() string
 	Conditions() []metav1.Condition
 	SetConditions(conditions ...metav1.Condition)
+	RemoveStale() bool
 }
 
 type status struct {
@@ -43,6 +44,7 @@ type status struct {
 	description string
 	state       State
 	conditions  []metav1.Condition
+	removeStale bool
 }
 
 // ErrorStatus returns a Status representing a reconciliation failure with the given conditions.
@@ -71,6 +73,7 @@ func ReadyStatus(conditions ...metav1.Condition) Status {
 		description: "Successfully reconciled",
 		state:       Ready,
 		conditions:  conditions,
+		removeStale: true,
 	}
 }
 
@@ -92,6 +95,10 @@ func ProcessingStatus(conditions ...metav1.Condition) Status {
 
 func (s *status) NestedError() error {
 	return s.err
+}
+
+func (s *status) RemoveStale() bool {
+	return s.removeStale
 }
 
 func (s *status) Description() string {
@@ -258,6 +265,20 @@ func UpdateApiGatewayStatus(ctx context.Context, k8sClient client.Client, apiGat
 		for _, c := range conditions {
 			if meta.SetStatusCondition(&apiGatewayCR.Status.Conditions, c) {
 				conditionsChanged = true
+			}
+		}
+
+		// Remove stale condition types not produced by this reconcile pass.
+		if status.RemoveStale() {
+			inPlay := make(map[string]struct{}, len(conditions))
+			for _, c := range conditions {
+				inPlay[c.Type] = struct{}{}
+			}
+			for _, c := range apiGatewayCR.Status.Conditions {
+				if _, ok := inPlay[c.Type]; !ok {
+					meta.RemoveStatusCondition(&apiGatewayCR.Status.Conditions, c.Type)
+					conditionsChanged = true
+				}
 			}
 		}
 
