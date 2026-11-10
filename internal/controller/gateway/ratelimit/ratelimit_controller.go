@@ -19,6 +19,8 @@ package ratelimit
 import (
 	"context"
 	"fmt"
+	"time"
+
 	ratelimitv1alpha1 "github.com/kyma-project/api-gateway/apis/gateway/ratelimit/v1alpha1"
 	operatorv1alpha1 "github.com/kyma-project/api-gateway/apis/operator/v1alpha1"
 	"github.com/kyma-project/api-gateway/internal/builders/envoyfilter"
@@ -34,7 +36,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
-	"time"
 )
 
 const (
@@ -77,15 +78,6 @@ func (r *RateLimitReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	existingAPIGateways := &operatorv1alpha1.APIGatewayList{}
 	if err := r.List(ctx, existingAPIGateways); err != nil {
 		l.Info("Unable to list APIGateway CRs")
-		return ctrl.Result{}, err
-	}
-
-	if len(existingAPIGateways.Items) < 1 {
-		rl.Status.Warning(fmt.Errorf("failed to reconcile RateLimit CR because of missing APIGateway CR in the cluster"))
-		if err := r.Status().Update(ctx, &rl); err != nil {
-			return ctrl.Result{}, err
-		}
-		err := fmt.Errorf("no APIGateway CR in the cluster")
 		return ctrl.Result{}, err
 	}
 
