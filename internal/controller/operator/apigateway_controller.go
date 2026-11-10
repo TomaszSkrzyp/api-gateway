@@ -389,13 +389,18 @@ func rateLimitsExists(ctx context.Context, k8sClient client.Client) ([]string, e
 		// RateLimits does not exist, there is not blocking rate limits
 		return nil, nil
 	}
+	if err != nil {
+		return nil, err
+	}
 
 	ctrl.Log.Info(fmt.Sprintf("There are %d RateLimit(s) found on cluster", len(rateLimits.Items)))
 	var blockingRateLimits []string
 	for _, rateLimit := range rateLimits.Items {
 		rateLimitNamespacedName := rateLimit.GetNamespace() + "/" + rateLimit.GetName()
 		ctrl.Log.Info("RateLimit rule blocking deletion", "rule", rateLimitNamespacedName)
-		blockingRateLimits = append(blockingRateLimits, rateLimitNamespacedName)
+		if len(blockingRateLimits) < 5 {
+			blockingRateLimits = append(blockingRateLimits, rateLimitNamespacedName)
+		}
 	}
 	return blockingRateLimits, nil
 }
